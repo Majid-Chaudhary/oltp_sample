@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:15-alpine3.20
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Delta_12345678
+      POSTGRES_DB: retail
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - docker_postgres_default
+
+  init-postgres:
+    image: postgres:15-alpine3.20
+    container_name: init_postgres
+    depends_on:
+      - postgres
+    entrypoint: >
+      /bin/bash -c "sleep 10 &&
+      PGPASSWORD=Delta_12345678 psql -h postgres -U postgres -d retail -f /scripts/sql/create_oltp_db.sql"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Delta@12345678
+    volumes:
+      - ./scripts:/scripts
+    networks:
+      - docker_postgres_default
+
+
+volumes:  
+  postgres_data:
+
+networks:
+  docker_postgres_default:
+    driver: bridge
