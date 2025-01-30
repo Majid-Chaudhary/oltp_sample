@@ -29,6 +29,15 @@ services:
     networks:
       - docker_postgres_default
 
+  syntheticdata:
+    image: majidchaudhary/syntheticdata:latest
+    container_name: syntheticdata
+    depends_on:
+      init-postgres:
+        condition: service_completed_successfully  
+    networks:
+      - docker_postgres_default
+
 
 volumes:  
   postgres_data:
