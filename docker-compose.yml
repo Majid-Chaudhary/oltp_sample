@@ -44,4 +44,5 @@ volumes:
 
 networks:
   docker_postgres_default:
+    name: docker_postgres_default
     driver: bridge

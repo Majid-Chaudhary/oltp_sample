@@ -23,183 +23,115 @@ LOGISTICS_DB_PARAMS = {
 # Initialize Faker
 fake = Faker()
 
-# Retail Database Functions
-
-def populate_products(conn):
+# Function to populate Cities table
+def populate_cities(conn):
     cursor = conn.cursor()
-    for _ in range(100):
-        product_name = fake.word()
-        category = fake.word()
-        price = round(random.uniform(5, 500), 2)
-        stock_quantity = random.randint(50, 500)
-        cursor.execute(
-            "INSERT INTO Products (name, category, price, stock_quantity) VALUES (%s, %s, %s, %s)",
-            (product_name, category, price, stock_quantity)
-        )
+    cities = ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia", "San Antonio", "San Diego", "Dallas", "San Jose"]
+    for city in cities:
+        cursor.execute("INSERT INTO Cities (city_name) VALUES (%s) ON CONFLICT (city_name) DO NOTHING", (city,))
     conn.commit()
-    print("100 sample products added.")
+    print("Cities table populated.")
 
+# Function to populate Warehouses table
+def populate_warehouses(conn):
+    cursor = conn.cursor()
+    warehouse_ids = []
+    for _ in range(10):  # Insert 10 warehouses
+        location = fake.city()
+        capacity = random.randint(100, 10000)  # Ensure valid capacity
+        cursor.execute("INSERT INTO Warehouses (location, capacity) VALUES (%s, %s) RETURNING warehouse_id", (location, capacity))
+        warehouse_id = cursor.fetchone()[0]
+        warehouse_ids.append(warehouse_id)
+    conn.commit()
+    print("Warehouses table populated.")
+    return warehouse_ids
+
+# Function to ensure Customers are populated
 def populate_customers(conn):
     cursor = conn.cursor()
-    emails = set()  # Track unique emails
-    for customer_id in range(1, 1001):  # Ensure customer IDs are sequential
+    customer_ids = []
+    used_emails = set()
+    for _ in range(1000):  # Insert exactly 1000 customers
         name = fake.name()
         email = fake.email()
-        while email in emails:  # Ensure email uniqueness
+        while email in used_emails:  # Ensure email is unique
             email = fake.email()
-        emails.add(email)  # Add to the set
+        used_emails.add(email)
         address = fake.address()
         phone = fake.phone_number()[:15]  # Truncate to 15 characters
         cursor.execute(
-            "INSERT INTO Customers (customer_id, name, email, address, phone) VALUES (%s, %s, %s, %s, %s)",
-            (customer_id, name, email, address, phone)
+            "INSERT INTO Customers (name, email, address, phone) VALUES (%s, %s, %s, %s) RETURNING customer_id",
+            (name, email, address, phone)
         )
+        customer_id = cursor.fetchone()[0]
+        customer_ids.append(customer_id)
     conn.commit()
-    print("1000 sample customers added.")
+    print("1000 Customers inserted successfully.")
+    return customer_ids
 
-# Logistics Database Functions
-
-def populate_warehouses(conn):
-    cursor = conn.cursor()
-    for _ in range(10):
-        location = fake.city()
-        capacity = random.randint(1000, 5000)
-        cursor.execute(
-            "INSERT INTO Warehouses (location, capacity) VALUES (%s, %s)",
-            (location, capacity)
-        )
-    conn.commit()
-    print("10 sample warehouses added.")
-
-def populate_inventory(conn):
-    cursor = conn.cursor()
-    for _ in range(500):
-        warehouse_id = random.randint(1, 10)
-        product_id = random.randint(1, 100)
-        quantity = random.randint(100, 1000)
-        cursor.execute(
-            "INSERT INTO Inventory (warehouse_id, product_id, quantity) VALUES (%s, %s, %s)",
-            (warehouse_id, product_id, quantity)
-        )
-    conn.commit()
-    print("500 inventory records added.")
-
-# Fact Data Functions
-
-def populate_orders_and_shipments(retail_conn, logistics_conn):
+# Function to ensure total_amount is copied to Shipments
+def populate_orders_and_shipments(retail_conn, logistics_conn, customer_ids, warehouse_ids):
     retail_cursor = retail_conn.cursor()
     logistics_cursor = logistics_conn.cursor()
-
-    for _ in range(100000):  # Generate 100,000 records
-        # Retail - Orders
-        customer_id = random.randint(1, 1000)  # Use valid customer IDs
+    
+    retail_conn.autocommit = True  # Enable autocommit to avoid transaction issues
+    logistics_conn.autocommit = True
+    
+    for _ in range(100000):  # Let the database generate order_id
+        customer_id = random.choice(customer_ids)  # Use only valid customer IDs
         order_date = fake.date_time_this_year()
         total_amount = round(random.uniform(20, 1000), 2)
-
-        retail_cursor.execute(
-            "INSERT INTO Orders (customer_id, order_date, total_amount) VALUES (%s, %s, %s) RETURNING order_id",
-            (customer_id, order_date, total_amount)
-        )
-        order_id = retail_cursor.fetchone()[0]
-
-        for _ in range(random.randint(1, 5)):
-            product_id = random.randint(1, 100)
-            quantity = random.randint(1, 10)
-            retail_cursor.execute("SELECT price FROM Products WHERE product_id = %s", (product_id,))
-            price = retail_cursor.fetchone()[0]
-            subtotal = price * quantity
-
+        
+        try:
+            # Insert into Orders and retrieve generated order_id
             retail_cursor.execute(
-                "INSERT INTO Order_Items (order_id, product_id, quantity, subtotal) VALUES (%s, %s, %s, %s)",
-                (order_id, product_id, quantity, subtotal)
+                "INSERT INTO Orders (customer_id, order_date, total_amount) VALUES (%s, %s, %s) RETURNING order_id",
+                (customer_id, order_date, total_amount)
             )
+            order_id = retail_cursor.fetchone()
+        
+            if order_id is None:
+                print("ERROR: Failed to retrieve order_id!")
+                continue  # Skip to next iteration if order_id is not retrieved
+        
+            order_id = order_id[0]
+            print(f"Inserted Order ID: {order_id} for Customer ID: {customer_id}")  # Debugging output
+            retail_conn.commit()  # Explicit commit after inserting an order
+        
+            warehouse_id = random.choice(warehouse_ids)  # Ensure valid warehouse_id
+            city_id = random.randint(1, 10)  # Assuming 10 predefined cities
+            shipment_date = fake.date_time_this_year()
+            delivery_date = fake.future_date()
+        
+            logistics_cursor.execute(
+                "INSERT INTO Shipments (order_id, warehouse_id, shipment_date, delivery_date, total_amount, city_id) VALUES (%s, %s, %s, %s, %s, %s)",
+                (order_id, warehouse_id, shipment_date, delivery_date, total_amount, city_id)
+            )
+            logistics_conn.commit()  # Explicit commit for shipments
+        
+        except Exception as e:
+            print(f"Database Error: {e}")
+            continue  # Skip problematic entries
 
-        # Logistics - Shipments
-        warehouse_id = random.randint(1, 10)
-        shipment_date = fake.date_time_this_year()
-        delivery_date = fake.future_date()
-        logistics_cursor.execute(
-            "INSERT INTO Shipments (order_id, warehouse_id, shipment_date, delivery_date) VALUES (%s, %s, %s, %s)",
-            (order_id, warehouse_id, shipment_date, delivery_date)
-        )
-
-        if _ % 1000 == 0:  # Commit every 1000 records for performance
-            retail_conn.commit()
-            logistics_conn.commit()
+        if _ % 1000 == 0:
             print(f"Processed {_} orders and shipments.")
-
-    retail_conn.commit()
-    logistics_conn.commit()
+    
     print("100,000 orders and shipments added.")
 
-def generate_live_data(retail_conn, logistics_conn):
-    retail_cursor = retail_conn.cursor()
-    logistics_cursor = logistics_conn.cursor()
-
-    while True:
-        # Add 2 orders for retail
-        for _ in range(2):
-            customer_id = random.randint(1, 1000)
-            total_amount = round(random.uniform(20, 1000), 2)
-
-            retail_cursor.execute(
-                "INSERT INTO Orders (customer_id, total_amount) VALUES (%s, %s) RETURNING order_id",
-                (customer_id, total_amount)
-            )
-            order_id = retail_cursor.fetchone()[0]
-
-            for _ in range(random.randint(1, 5)):
-                product_id = random.randint(1, 100)
-                quantity = random.randint(1, 10)
-                retail_cursor.execute("SELECT price FROM Products WHERE product_id = %s", (product_id,))
-                price = retail_cursor.fetchone()[0]
-                subtotal = price * quantity
-
-                retail_cursor.execute(
-                    "INSERT INTO Order_Items (order_id, product_id, quantity, subtotal) VALUES (%s, %s, %s, %s)",
-                    (order_id, product_id, quantity, subtotal)
-                )
-
-        # Add 1 shipment for logistics
-        order_id = random.randint(1, 100000)  # Assume order IDs from the initial population
-        warehouse_id = random.randint(1, 10)
-        shipment_date = fake.date_time_this_year()
-        delivery_date = fake.future_date()
-        logistics_cursor.execute(
-            "INSERT INTO Shipments (order_id, warehouse_id, shipment_date, delivery_date) VALUES (%s, %s, %s, %s)",
-            (order_id, warehouse_id, shipment_date, delivery_date)
-        )
-
-        retail_conn.commit()
-        logistics_conn.commit()
-        print("Added 2 retail orders and 1 logistics shipment.")
-
-        time.sleep(1)  # Wait for 1 second
-
-# Main script
+# Main execution
 if __name__ == "__main__":
     retail_conn = None
     logistics_conn = None
     try:
-        # Connect to Retail and Logistics Databases
         print("Connecting to Retail and Logistics Databases...")
         retail_conn = psycopg2.connect(**RETAIL_DB_PARAMS)
         logistics_conn = psycopg2.connect(**LOGISTICS_DB_PARAMS)
-
-        # Populate Dimensional Data
-        populate_products(retail_conn)
-        populate_customers(retail_conn)
-        populate_warehouses(logistics_conn)
-        populate_inventory(logistics_conn)
-
-        # Populate Fact Data
-        print("Populating initial orders and shipments...")
-        populate_orders_and_shipments(retail_conn, logistics_conn)
-
-        # Generate live data
-        print("Generating live data...")
-        generate_live_data(retail_conn, logistics_conn)
-
+        
+        populate_cities(logistics_conn)
+        warehouse_ids = populate_warehouses(logistics_conn)  # Ensure Warehouses are populated
+        customer_ids = populate_customers(retail_conn)  # Ensure Customers are populated first
+        populate_orders_and_shipments(retail_conn, logistics_conn, customer_ids, warehouse_ids)
+        
     except Exception as e:
         print(f"Error: {e}")
     finally:
